@@ -1,0 +1,1178 @@
+substitutions:
+  device_name: epaper
+  friendly_name: epaper
+
+  #settings
+  sleep_time: 60min
+  wake_time: 60s #default wake time
+  screen_update_time: 18s
+
+globals:
+  - id: recorded_display_refresh
+    type: int
+    restore_value: yes
+    initial_value: '0' 
+  - id: updates
+    type: int
+    restore_value: no
+    initial_value: '0'     
+  - id: number_of_sensors
+    type: int
+    restore_value: yes
+    initial_value: '50'  #check number of sensor updated before going to sleep 
+
+esphome:
+  name: ${device_name}
+  platformio_options:
+    board_upload.flash_size: 4MB  
+  includes:
+    - includes/text_utils.h  
+  on_boot:
+    priority: -100.0
+    then:
+      # Wait a bit longer so all the items are received
+      - logger.log: "Booted, waiting a bit until all sensors are updated..."     
+
+      - wait_until:
+          condition:
+            and:
+              - time.has_time
+              - lambda: 'return (id(updates) >= id(number_of_sensors));'
+          timeout: 20s                                
+   
+      - script.execute: update_screen  
+      - logger.log: "Waiting some seconds for screen to refresh before continuing..."
+      - delay: ${screen_update_time}
+      - script.execute: check_battery         
+      - script.execute: start_deep_sleep
+      
+
+
+# Script for updating screen - Refresh display and publish refresh count and time. 
+script:
+  - id: update_screen
+    then:
+      - logger.log: "Refreshing display..."
+      - component.update: eink_display
+      - delay: 500ms
+      - component.update: eink_display
+      - lambda: 'id(recorded_display_refresh) += 1;'  
+      - lambda: 'id(display_last_update).publish_state(id(esptime).now().timestamp);' 
+   
+  - id: start_deep_sleep
+    mode: queued
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: enable_deep_sleep   
+          then:
+            - logger.log: 'Deep Sleep Enabled; going to sleep'
+            - deep_sleep.enter:
+                id: deep_sleep_1
+                sleep_duration: ${sleep_time}         
+          else:
+            - logger.log: 'Deep Sleep Disabled'
+            - deep_sleep.prevent: deep_sleep_1  
+
+  - id: check_battery
+    mode: queued
+    then:
+      - if:
+          condition:
+            lambda: 'return (id(batt_voltage).state < 3.1);'
+          then:
+            - logger.log: 'Batterij bijna leeg, shutdown'
+            - text_sensor.template.publish:
+                id: update_status
+                state: "Batterij bijna leeg, shutdown"    
+            - delay: 2s    
+            - deep_sleep.enter:
+                id: deep_sleep_1                                          
+
+esp32:
+  board: firebeetle32
+  framework:
+    type: arduino
+
+logger:
+  level: INFO    
+
+deep_sleep:
+  id: deep_sleep_1
+  run_duration: ${wake_time}
+  sleep_duration: ${sleep_time}
+  
+binary_sensor:  
+  - platform: homeassistant
+    id: enable_deep_sleep
+    entity_id: input_boolean.e_paper_deep_sleep 
+    on_state:
+      then:
+         - script.execute: start_deep_sleep  
+
+  - platform: status
+    name: ${friendly_name} Status           
+
+packages:
+  general_settings: !include general_settings.yaml
+
+wifi:
+  manual_ip:
+    static_ip: !secret ip_epaper
+  fast_connect: true
+  power_save_mode: light  
+
+button:
+  - platform: template
+    name: ${friendly_name} Refresh screen
+    id: refresh
+    icon: "mdi:emoticon-outline"
+    on_press:  
+      - logger.log: "Refresh screen button pressed"      
+      - script.execute: update_screen  
+  - platform: safe_mode
+    name: ${friendly_name} Safe mode
+    id: safe_mode_button              
+
+time:
+  - platform: homeassistant
+    id: esptime
+    timezone: Europe/Amsterdam
+    on_time_sync:
+      - then:
+          - logger.log: Time has been set and is valid!       
+    on_time:
+      # Every evening after 22:00
+      - hours: 22
+        then:
+          - logger.log: Going for a sleep during the night. Good night!   
+          - deep_sleep.enter:
+              id: deep_sleep_1
+              until: "6:00:00"
+              time_id: esptime
+
+sensor:
+# Battery voltage
+  - platform: adc
+    name: ${friendly_name} Battery voltage
+    id: batt_voltage  
+    pin: GPIO34
+    accuracy_decimals: 2
+    # update_interval: 60s
+    attenuation: 11dB
+    filters:
+      - multiply: 2.0  # The voltage divider requires us to multiply by 2     
+    on_value:
+      - component.update: batt_percentage
+
+  - platform: template
+    name: ${friendly_name} Battery
+    id: batt_percentage
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    device_class: battery
+    lambda: |-
+      int y = (1-(4.1-id(batt_voltage).state)/(4.1-3.3))*100;
+      if (y < 100) {return y;} else {return 100;};    
+
+  - platform: template
+    name: ${friendly_name} Display refreshes
+    id: display_refreshes
+    accuracy_decimals: 0    
+    unit_of_measurement: Refreshs
+    state_class: total_increasing
+    entity_category: diagnostic   
+    lambda: |-
+      return id(recorded_display_refresh);               
+
+# Last update  
+  - platform: template
+    name: ${friendly_name} Last Update
+    device_class: timestamp
+    id: display_last_update
+
+# Weather (temperture, temperature low, rain)
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_temperature_now
+    id: weather_temperature_now
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_temperature_today
+    id: weather_temperature_today
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_templow_today
+    id: weather_templow_today
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_rain_today
+    id: weather_rain_today
+    on_value: 
+      lambda: |-
+        id(updates)++;                        
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_wind_speed_now
+    id: weather_wind_speed_now
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_wind_force_now
+    id: weather_wind_force_now
+    on_value: 
+      lambda: |-
+        id(updates)++;      
+               
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_temperature_0
+    id: weather_temperature_0
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_templow_0
+    id: weather_templow_0
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_rain_0
+    id: weather_rain_0
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_temperature_1
+    id: weather_temperature_1
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_templow_1
+    id: weather_templow_1
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_rain_1
+    id: weather_rain_1
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_temperature_2
+    id: weather_temperature_2
+    on_value: 
+      lambda: |-
+        id(updates)++;
+ 
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_templow_2
+    id: weather_templow_2
+    on_value: 
+      lambda: |-
+        id(updates)++;
+ 
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_rain_2
+    id: weather_rain_2
+    on_value: 
+      lambda: |-
+        id(updates)++;
+ 
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_temperature_3
+    id: weather_temperature_3
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_templow_3
+    id: weather_templow_3
+    on_value: 
+      lambda: |-
+        id(updates)++;
+ 
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_rain_3
+    id: weather_rain_3
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_temperature_4
+    id: weather_temperature_4
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_templow_4
+    id: weather_templow_4
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_rain_4
+    id: weather_rain_4
+    on_value: 
+      lambda: |-
+        id(updates)++;
+    
+text_sensor:
+  - platform: template
+    name: ${friendly_name} Update status
+    id: update_status
+    update_interval: never
+
+  - platform: wifi_info
+    ip_address:
+      name: ${friendly_name} IP Address
+      icon: mdi:ip-network-outline 
+    ssid:
+      name: ${friendly_name} WiFi SSID 
+
+#Weather (condition, day) 
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_condition_now
+    id: weather_condition_now
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_wind_direction_now
+    id: weather_wind_direction_now
+    on_value: 
+      lambda: |-
+        id(updates)++;
+ 
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_condition_0
+    id: weather_condition_0
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_day_0
+    id: weather_day_0
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_condition_1
+    id: weather_condition_1
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_day_1
+    id: weather_day_1
+    on_value: 
+      lambda: |-
+        id(updates)++;
+ 
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_condition_2
+    id: weather_condition_2
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_day_2
+    id: weather_day_2
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_condition_3
+    id: weather_condition_3
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_day_3
+    id: weather_day_3
+    on_value: 
+      lambda: |-
+        id(updates)++;
+ 
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_condition_4
+    id: weather_condition_4
+    on_value: 
+      lambda: |-
+        id(updates)++;
+ 
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: weather_day_4
+    id: weather_day_4
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+ #Afvalwijzer (next, collection days (GFT, papier, PMD, restafval))
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: afval_today
+    id: afval_today
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: afval_next
+    id: afval_next
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: afval_next_0
+    id: afval_next_0
+    on_value: 
+      lambda: |-
+        id(updates)++;
+ 
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: afval_next_date_0
+    id: afval_next_date_0
+    on_value: 
+      lambda: |-
+        id(updates)++;
+ 
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: afval_next_1
+    id: afval_next_1
+    on_value: 
+      lambda: |-
+        id(updates)++;
+ 
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: afval_next_date_1
+    id: afval_next_date_1
+    on_value: 
+      lambda: |-
+        id(updates)++;
+ 
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: afval_next_2
+    id: afval_next_2
+    on_value: 
+      lambda: |-
+        id(updates)++;
+ 
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: afval_next_date_2
+    id: afval_next_date_2
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: afval_next_3
+    id: afval_next_3
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: afval_next_date_3
+    id: afval_next_date_3
+    on_value: 
+      lambda: |-
+        id(updates)++;
+ 
+ #Sunrise / Sunset
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: sun_next_rising
+    id: sun_next_rising
+    on_value: 
+      lambda: |-
+        id(updates)++;
+ 
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: sun_next_setting
+    id: sun_next_setting
+    on_value: 
+      lambda: |-
+        id(updates)++;
+ 
+ #Picnic today
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: picnic_today
+    id: picnic_today
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+ #Rocket today
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: rocket_today
+    id: rocket_today
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+ #Moon phase
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: moon_phase
+    id: moon_phase
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+# Datum + dag
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: day_full
+    id: day_full
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: day
+    id: day
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+  - platform: homeassistant
+    entity_id: sensor.e_paper_display_data
+    attribute: datum
+    id: datum
+    on_value: 
+      lambda: |-
+        id(updates)++;
+
+image:
+  - file: "includes/images/gft.png"
+    id: gft
+    resize: 50x50    
+  - file: "includes/images/pmd.png"
+    id: pmd
+    resize: 50x50   
+    # type: TRANSPARENT_BINARY
+  - file: "includes/images/restafval.png"
+    id: restafval
+    resize: 50x50 
+  - file: "includes/images/papier.png"
+    id: papier
+    resize: 50x50   
+  - file: "includes/images/picnic.png"
+    id: picnic
+    resize: 30x30             
+
+font:
+  - file: 'fonts/Avenir Medium.ttf'
+    id: font_dag
+    size: 30
+    glyphs: &default-glyphs
+      ['&', '@', '!', ',', '.', '"', '%', '(', ')', '+', '-', '_', ':', '°', '0',
+       '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E',
+       'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S',
+       'T', 'U', 'V', 'W', 'X', 'Y', 'Z', ' ', 'a', 'b', 'c', 'd', 'e', 'f',
+       'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't',
+       'u', 'v', 'w', 'x', 'y', 'z','|', '/']      
+
+  - file: 'fonts/Avenir Book.ttf'
+    id: font_datum
+    size: 30 
+    glyphs: *default-glyphs    
+
+  - file: 'fonts/Avenir Medium.ttf'
+    id: font_headings
+    size: 30 
+    glyphs: *default-glyphs    
+
+  - file: 'fonts/Avenir Book.ttf'
+    id: font_normal_text
+    size: 24
+    glyphs: *default-glyphs    
+
+  - file: 'fonts/Avenir Medium.ttf'
+    id: font_medium
+    size: 24
+    glyphs: *default-glyphs      
+
+  - file: 'fonts/Avenir Medium.ttf'
+    id: font_large_bold
+    size: 108
+    glyphs: ['-',' ', '°', '.', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'C', 'a', 'n']
+
+  - file: 'fonts/Avenir Medium.ttf'
+    id: font_degree
+    size: 54
+    glyphs: ['°', 'C']
+
+  - file: 'fonts/Avenir Medium.ttf'
+    id: font_small
+    size: 18
+    glyphs: *default-glyphs
+
+  - file: 'fonts/Avenir Book.ttf'
+    id: font_footer
+    size: 16
+    glyphs: *default-glyphs
+
+  - file: 'fonts/Avenir Heavy.ttf'
+    id: font_small_bold
+    size: 18
+    glyphs: *default-glyphs
+
+  - file: 'fonts/Avenir Black.ttf'
+    id: font_small_black
+    size: 18    
+    glyphs: *default-glyphs    
+
+  # Include Material Design Icons font
+  # Thanks to https://community.home-assistant.io/t/display-materialdesign-icons-on-esphome-attached-to-screen/199790/16
+  - file: 'fonts/materialdesignicons-webfont.ttf'
+    id: font_mdi_large
+    # size: 96
+    size: 124
+    glyphs: &mdi-weather-glyphs
+      - "\U000F0590" # mdi-weather-cloudy
+      - "\U000F0F2F" # mdi-weather-cloudy-alert
+      - "\U000F0E6E" # mdi-weather-cloudy-arrow-right
+      - "\U000F0591" # mdi-weather-fog
+      - "\U000F0592" # mdi-weather-hail
+      - "\U000F0F30" # mdi-weather-hazy
+      - "\U000F0898" # mdi-weather-hurricane
+      - "\U000F0593" # mdi-weather-lightning
+      - "\U000F067E" # mdi-weather-lightning-rainy
+      - "\U000F0594" # mdi-weather-night
+      - "\U000F0F31" # mdi-weather-night-partly-cloudy
+      - "\U000F0595" # mdi-weather-partly-cloudy
+      - "\U000F0F32" # mdi-weather-partly-lightning
+      - "\U000F0F33" # mdi-weather-partly-rainy
+      - "\U000F0F34" # mdi-weather-partly-snowy
+      - "\U000F0F35" # mdi-weather-partly-snowy-rainy
+      - "\U000F0596" # mdi-weather-pouring
+      - "\U000F0597" # mdi-weather-rainy
+      - "\U000F0598" # mdi-weather-snowy
+      - "\U000F0F36" # mdi-weather-snowy-heavy
+      - "\U000F067F" # mdi-weather-snowy-rainy
+      - "\U000F0599" # mdi-weather-sunny
+      - "\U000F0F37" # mdi-weather-sunny-alert
+      - "\U000F14E4" # mdi-weather-sunny-off
+      - "\U000F059A" # mdi-weather-sunset
+      - "\U000F059B" # mdi-weather-sunset-down
+      - "\U000F059C" # mdi-weather-sunset-up
+      - "\U000F0F38" # mdi-weather-tornado
+      - "\U000F059D" # mdi-weather-windy
+      - "\U000F059E" # mdi-weather-windy-variant
+      - "\U000F0A7A" # mdi-trash-can-outline
+      - "\U000F0E17" # mdi-calendar
+      - "\U000F0083" # mdi-battery-alert
+
+  - file: 'fonts/materialdesignicons-webfont.ttf'
+    id: font_mdi_medium
+    size: 48
+    glyphs: *mdi-weather-glyphs
+
+  - file: 'fonts/materialdesignicons-webfont.ttf'
+    id: font_mdi_medium_small
+    size: 36
+    glyphs: 
+      - "\U000F0E17" # mdi-calendar
+      - "\U000F00F6" # mdi-calendar-today
+      - "\U000F0110" # mdi-cart
+      - "\U000F14DF" # mdi-rocket-launch-outline
+
+  - file: 'fonts/materialdesignicons-webfont.ttf'
+    id: font_mdi_small
+    size: 30
+    glyphs:
+      - "\U000F059A" # mdi-weather-sunset
+      - "\U000F059B" # mdi-weather-sunset-down
+      - "\U000F059C" # mdi-weather-sunset-up
+      - "\U000F059D" # mdi-weather-windy
+      - "\U000F10C3" # mdi-thermometer-low
+      - "\U000F10C2" # mdi-thermometer-high
+      - "\U000F0E05" # mdi-thermometer-plus
+      - "\U000F0E04" # mdi-thermometer-minus
+      - "\U000F0E03" # mdi-thermometer-chevron-up
+      - "\U000F0E02" # mdi-thermometer-chevron-down    
+      - "\U000F050F" # mdi-thermometer
+      - "\U000F0E0A" # mdi-water-outline
+
+
+  - file: 'fonts/materialdesignicons-webfont.ttf'
+    id: font_mdi_footer
+    size: 18
+    glyphs:
+      - "\U000F0079" # mdi-battery
+      - "\U000F007A" # mdi-battery-10
+      - "\U000F007B" # mdi-battery-20
+      - "\U000F007C" # mdi-battery-30
+      - "\U000F007D" # mdi-battery-40
+      - "\U000F007E" # mdi-battery-50
+      - "\U000F007F" # mdi-battery-60
+      - "\U000F0080" # mdi-battery-70
+      - "\U000F0081" # mdi-battery-80
+      - "\U000F0082" # mdi-battery-90
+      - "\U000F06B0" # mdi-update
+      - "\U000F0450" # mdi-refresh
+   
+  - file: 'fonts/moon_phases.ttf'
+    id: font_moon
+    size: 30
+    glyphs: [' ', '0', '1', 'G', 'T', 'W', 'Q', 'D', 'J']
+
+
+# Pins for Waveshare ePaper ESP Board
+spi:
+  clk_pin: 18
+  mosi_pin: 23  
+
+# Now render everything on the ePaper screen.    
+display:
+  - platform: waveshare_epaper
+    id: eink_display
+    cs_pin: 2
+    dc_pin: 22
+    busy_pin: 13
+    reset_pin: 21
+    model: 7.50in-bV2
+    update_interval: never
+    reset_duration: 2ms
+    rotation: 0°
+    lambda: |-
+      if(id(batt_voltage).state >= 3.10){
+
+        std::map<std::string, std::string> moon_icon_map
+          {
+            {"first_quarter", "G"},
+            {"full_moon", "1"},
+            {"last_quarter", "T"},
+            {"new_moon", "0"},
+            {"waning_crescent", "W"},
+            {"waning_gibbous", "Q"},
+            {"waxing_crescent", "D"},
+            {"waxing_gibbous", "J"},
+            
+          };
+
+        std::map<std::string, std::string> moon_description
+          {
+            {"first_quarter", "Eerste kwartier"},
+            {"full_moon", "Volle maan"},
+            {"last_quarter", "Laatste kwartier"},
+            {"new_moon", "Nieuwe maan"},
+            {"waning_crescent", "Afnemende halve maan"},
+            {"waning_gibbous", "Afnemende maan"},
+            {"waxing_crescent", "Wassende halve maan"},
+            {"waxing_gibbous", "Wassende maan"},
+            
+          };
+
+        // Map weather states to MDI characters.
+        std::map<std::string, std::string> weather_icon_map
+          {
+            {"cloudy", "\U000F0590"},
+            {"cloudy-alert", "\U000F0F2F"},
+            {"cloudy-arrow-right", "\U000F0E6E"},
+            {"fog", "\U000F0591"},
+            {"hail", "\U000F0592"},
+            {"hazy", "\U000F0F30"},
+            {"hurricane", "\U000F0898"},
+            {"lightning", "\U000F0593"},
+            {"lightning-rainy", "\U000F067E"},
+            {"night", "\U000F0594"},
+            {"night-partly-cloudy", "\U000F0F31"},
+            {"partlycloudy", "\U000F0595"},
+            {"partly-lightning", "\U000F0F32"},
+            {"partly-rainy", "\U000F0F33"},
+            {"partly-snowy", "\U000F0F34"},
+            {"partly-snowy-rainy", "\U000F0F35"},
+            {"pouring", "\U000F0596"},
+            {"rainy", "\U000F0597"},
+            {"snowy", "\U000F0598"},
+            {"snowy-heavy", "\U000F0F36"},
+            {"snowy-rainy", "\U000F067F"},
+            {"sunny", "\U000F0599"},
+            {"sunny-alert", "\U000F0F37"},
+            {"sunny-off", "\U000F14E4"},
+            {"sunset", "\U000F059A"},
+            {"sunset-down", "\U000F059B"},
+            {"sunset-up", "\U000F059C"},
+            {"tornado", "\U000F0F38"},
+            {"windy", "\U000F059D"},
+            {"windy-variant", "\U000F059E"},
+          };
+
+        int xres = it.get_width();
+        int yres = it.get_height();   
+
+        // Fill background in black.
+        it.fill(COLOR_OFF);
+
+        // date section
+        int date_xoffset = 10;
+        int date_yoffset = 10;
+          // Print full weekday name
+          it.printf(date_xoffset, date_yoffset, id(font_dag), TextAlign::TOP_LEFT, "%s", id(day_full).state.c_str());
+          int day_size = GetTextWidth(&it, id(font_dag), "%s", id(day_full).state.c_str());
+          //  Print full date
+          //it.printf(date_xoffset, date_yoffset+30, id(font_datum), TextAlign::TOP_LEFT, "%s", id(datum).state.c_str());
+          it.printf(date_xoffset + day_size+10, date_yoffset, id(font_datum), TextAlign::TOP_LEFT, "%s", id(datum).state.c_str());
+
+        // Weather Section
+        int wy_offset = date_yoffset + 35; //weather y offset
+          //  WEATHER STATE ICON
+          it.printf(80, wy_offset, id(font_mdi_large), TextAlign::TOP_CENTER, "%s", weather_icon_map[id(weather_condition_now).state.c_str()].c_str());
+          // TEMPERATURE
+          it.printf(330, wy_offset, id(font_large_bold), TextAlign::TOP_RIGHT, "%.0f", id(weather_temperature_now).state);
+          it.print(330, wy_offset, id(font_degree), TextAlign::TOP_LEFT, "°C");    
+ 
+          int w_x_offset = 10;  
+          int w_y_offset = 190;   
+
+
+          //  Print rain
+          it.printf(w_x_offset, w_y_offset, id(font_mdi_small), TextAlign::CENTER_LEFT, "\U000F0E0A");
+          it.printf(w_x_offset+35, w_y_offset, id(font_small_bold), TextAlign::CENTER_LEFT, "%.1f mm", id(weather_rain_today).state);  
+
+          w_x_offset += 110; 
+
+          //  Print temp low | high
+          it.printf(w_x_offset, w_y_offset, id(font_mdi_small), TextAlign::CENTER_LEFT, "\U000F050F");
+          it.printf(w_x_offset+35, w_y_offset, id(font_small_bold), TextAlign::CENTER_LEFT, "%.0f°C | %.0f°C", id(weather_templow_today).state, id(weather_temperature_today).state);
+
+
+          w_x_offset = 10; 
+          w_y_offset += 35;         
+
+          //  Print sunrise
+          it.printf(w_x_offset, w_y_offset, id(font_mdi_small),  TextAlign::CENTER_LEFT, "\U000F059C");
+          it.printf(w_x_offset+35, w_y_offset, id(font_small_bold), TextAlign::CENTER_LEFT, "%s", id(sun_next_rising).state.c_str());
+          w_x_offset += 110; 
+
+          //  Print windspeed
+          it.printf(w_x_offset, w_y_offset, id(font_mdi_small), TextAlign::CENTER_LEFT, "\U000F059D");
+          it.printf(w_x_offset+35, w_y_offset, id(font_small_bold), TextAlign::CENTER_LEFT, "%.1f km/h (%.0f Bft %s)", id(weather_wind_speed_now).state, id(weather_wind_force_now).state, id(weather_wind_direction_now).state.c_str());
+
+          w_x_offset = 10; 
+          w_y_offset += 35; 
+
+          //  Print sunset
+          it.printf(w_x_offset, w_y_offset, id(font_mdi_small), TextAlign::CENTER_LEFT, "\U000F059B");
+          it.printf(w_x_offset+35, w_y_offset, id(font_small_bold), TextAlign::CENTER_LEFT, "%s", id(sun_next_setting).state.c_str());
+          w_x_offset += 110; 
+
+          //  Print moon
+          it.printf(w_x_offset, w_y_offset, id(font_moon), TextAlign::CENTER_LEFT, "%s", moon_icon_map[id(moon_phase).state.c_str()].c_str());
+          it.printf(w_x_offset+35, w_y_offset, id(font_small_bold), TextAlign::CENTER_LEFT, "%s", moon_description[id(moon_phase).state.c_str()].c_str());             
+        
+        // Weather forecast section
+        int forecast_yoffset = 320;
+        it.print(10, forecast_yoffset, id(font_headings), TextAlign::BOTTOM_LEFT, "Weersvoorspelling");
+        
+        forecast_yoffset += 10;
+        int fcst_xstart = 45;
+        int fcst_offset = 80;
+          it.printf(fcst_xstart, forecast_yoffset,    id(font_small_black), TextAlign::TOP_CENTER, "%s", id(weather_day_0).state.c_str());
+          it.printf(fcst_xstart, forecast_yoffset+20, id(font_mdi_medium), TextAlign::TOP_CENTER, "%s", weather_icon_map[id(weather_condition_0).state.c_str()].c_str());
+          it.printf(fcst_xstart, forecast_yoffset+72, id(font_small_bold), TextAlign::TOP_CENTER, "%.0f°C", id(weather_temperature_0).state);
+          it.printf(fcst_xstart, forecast_yoffset+100, id(font_small), TextAlign::TOP_CENTER, "%.0f°C", id(weather_templow_0).state);
+          it.printf(fcst_xstart, forecast_yoffset+128, id(font_small), TextAlign::TOP_CENTER, "%.1f mm", id(weather_rain_0).state);
+
+
+          fcst_xstart += fcst_offset;
+          it.printf(fcst_xstart, forecast_yoffset,    id(font_small_black), TextAlign::TOP_CENTER, "%s", id(weather_day_1).state.c_str());
+          it.printf(fcst_xstart, forecast_yoffset+20, id(font_mdi_medium), TextAlign::TOP_CENTER, "%s", weather_icon_map[id(weather_condition_1).state.c_str()].c_str());
+          it.printf(fcst_xstart, forecast_yoffset+72, id(font_small_bold), TextAlign::TOP_CENTER, "%.0f°C", id(weather_temperature_1).state);
+          it.printf(fcst_xstart, forecast_yoffset+100, id(font_small), TextAlign::TOP_CENTER, "%.0f°C", id(weather_templow_1).state);
+          it.printf(fcst_xstart, forecast_yoffset+128, id(font_small), TextAlign::TOP_CENTER, "%.1f mm", id(weather_rain_1).state);
+
+          fcst_xstart += fcst_offset;
+          it.printf(fcst_xstart, forecast_yoffset,    id(font_small_black), TextAlign::TOP_CENTER, "%s", id(weather_day_2).state.c_str());
+          it.printf(fcst_xstart, forecast_yoffset+20, id(font_mdi_medium), TextAlign::TOP_CENTER, "%s", weather_icon_map[id(weather_condition_2).state.c_str()].c_str());
+          it.printf(fcst_xstart, forecast_yoffset+72, id(font_small_bold), TextAlign::TOP_CENTER, "%.0f°C", id(weather_temperature_2).state);
+          it.printf(fcst_xstart, forecast_yoffset+100, id(font_small), TextAlign::TOP_CENTER, "%.0f°C", id(weather_templow_2).state);
+          it.printf(fcst_xstart, forecast_yoffset+128, id(font_small), TextAlign::TOP_CENTER, "%.1f mm", id(weather_rain_2).state);
+
+          fcst_xstart += fcst_offset;
+          it.printf(fcst_xstart, forecast_yoffset,    id(font_small_black), TextAlign::TOP_CENTER, "%s", id(weather_day_3).state.c_str());
+          it.printf(fcst_xstart, forecast_yoffset+20, id(font_mdi_medium), TextAlign::TOP_CENTER, "%s", weather_icon_map[id(weather_condition_3).state.c_str()].c_str());
+          it.printf(fcst_xstart, forecast_yoffset+72, id(font_small_bold), TextAlign::TOP_CENTER, "%.0f°C", id(weather_temperature_3).state);
+          it.printf(fcst_xstart, forecast_yoffset+100, id(font_small), TextAlign::TOP_CENTER, "%.0f°C", id(weather_templow_3).state);
+          it.printf(fcst_xstart, forecast_yoffset+128, id(font_small), TextAlign::TOP_CENTER, "%.1f mm", id(weather_rain_3).state);
+
+          fcst_xstart += fcst_offset;
+          it.printf(fcst_xstart, forecast_yoffset,    id(font_small_black), TextAlign::TOP_CENTER, "%s", id(weather_day_4).state.c_str());
+          it.printf(fcst_xstart, forecast_yoffset+20, id(font_mdi_medium), TextAlign::TOP_CENTER, "%s", weather_icon_map[id(weather_condition_4).state.c_str()].c_str());
+          it.printf(fcst_xstart, forecast_yoffset+72, id(font_small_bold), TextAlign::TOP_CENTER, "%.0f°C", id(weather_temperature_4).state);
+          it.printf(fcst_xstart, forecast_yoffset+100, id(font_small), TextAlign::TOP_CENTER, "%.0f°C", id(weather_templow_4).state);
+          it.printf(fcst_xstart, forecast_yoffset+128, id(font_small), TextAlign::TOP_CENTER, "%.1f mm", id(weather_rain_4).state);        
+
+        it.line(425, 10, 425, 470);    
+
+        
+        int afval_yoffset = 10;
+        int afval_xstart = 450;
+        int afval_x_offset = 85;
+        
+        it.print(afval_xstart, afval_yoffset, id(font_headings), TextAlign::TOP_LEFT, "Afvalwijzer");
+
+        afval_yoffset += 60;
+
+        //Afval today
+        if(id(afval_today).state != "-"){
+          it.printf(afval_xstart, afval_yoffset, id(font_mdi_medium_small), TextAlign::CENTER_LEFT, "\U000F00F6"); 
+          it.printf(afval_xstart+40, afval_yoffset, id(font_medium), TextAlign::CENTER_LEFT, "%s", id(afval_today).state.c_str());
+
+          afval_yoffset += 40;
+        }
+
+        //Next afval
+        it.printf(afval_xstart, afval_yoffset, id(font_mdi_medium_small), TextAlign::CENTER_LEFT, "\U000F0E17"); 
+        it.printf(afval_xstart+40, afval_yoffset, id(font_medium), TextAlign::CENTER_LEFT, "%s", id(afval_next).state.c_str());
+
+        afval_yoffset += 30;
+
+        //afval next omschrijvingen
+
+        it.printf(afval_xstart+25, afval_yoffset, id(font_small_black), TextAlign::TOP_CENTER, "%s", id(afval_next_0).state.c_str());
+        it.printf(afval_xstart+afval_x_offset+25, afval_yoffset, id(font_small_black), TextAlign::TOP_CENTER, "%s", id(afval_next_1).state.c_str());
+        it.printf(afval_xstart+2*afval_x_offset+25, afval_yoffset, id(font_small_black), TextAlign::TOP_CENTER, "%s", id(afval_next_2).state.c_str());
+        it.printf(afval_xstart+3*afval_x_offset+25, afval_yoffset, id(font_small_black), TextAlign::TOP_CENTER, "%s", id(afval_next_3).state.c_str());                  
+
+        afval_yoffset += 80;
+
+         //afval next data
+        it.printf(afval_xstart+25, afval_yoffset, id(font_small_bold), TextAlign::TOP_CENTER, "%s", id(afval_next_date_0).state.c_str());
+        it.printf(afval_xstart+afval_x_offset+25, afval_yoffset, id(font_small_bold), TextAlign::TOP_CENTER, "%s", id(afval_next_date_1).state.c_str());
+        it.printf(afval_xstart+2*afval_x_offset+25, afval_yoffset, id(font_small_bold), TextAlign::TOP_CENTER, "%s", id(afval_next_date_2).state.c_str());
+        it.printf(afval_xstart+3*afval_x_offset+25, afval_yoffset, id(font_small_bold), TextAlign::TOP_CENTER, "%s", id(afval_next_date_3).state.c_str()); 
+
+        afval_yoffset -= 60;
+
+        //afval next iconen
+        //afval next 0
+        if (id(afval_next_0).state == "PMD")
+          {
+            it.image(afval_xstart, afval_yoffset, id(pmd));
+          }
+        else if (id(afval_next_0).state == "Papier")
+          {
+            it.image(afval_xstart, afval_yoffset, id(papier));
+          }
+        else if (id(afval_next_0).state == "Restafval")
+          {
+            it.image(afval_xstart, afval_yoffset, id(restafval));
+          }
+        else if (id(afval_next_0).state == "GFT")
+          {
+            it.image(afval_xstart, afval_yoffset, id(gft));
+          }
+
+        //afval next 1
+        afval_xstart+= afval_x_offset;
+        if (id(afval_next_1).state == "PMD")
+          {
+            it.image(afval_xstart, afval_yoffset, id(pmd));
+          }
+        else if (id(afval_next_1).state == "Papier")
+          {
+            it.image(afval_xstart, afval_yoffset, id(papier));
+          }
+        else if (id(afval_next_1).state == "Restafval")
+          {
+            it.image(afval_xstart, afval_yoffset, id(restafval));
+          }
+        else if (id(afval_next_1).state == "GFT")
+          {
+            it.image(afval_xstart, afval_yoffset, id(gft));
+          }
+
+        //afval next 2
+        afval_xstart+= afval_x_offset;
+        if (id(afval_next_2).state == "PMD")
+          {
+            it.image(afval_xstart, afval_yoffset, id(pmd));
+          }
+        else if (id(afval_next_2).state == "Papier")
+          {
+            it.image(afval_xstart, afval_yoffset, id(papier));
+          }
+        else if (id(afval_next_2).state == "Restafval")
+          {
+            it.image(afval_xstart, afval_yoffset, id(restafval));
+          }
+        else if (id(afval_next_2).state == "GFT")
+          {
+            it.image(afval_xstart, afval_yoffset, id(gft));
+          }
+
+        //afval next 3
+        afval_xstart+= afval_x_offset;
+        if (id(afval_next_3).state == "PMD")
+          {
+            it.image(afval_xstart, afval_yoffset, id(pmd));
+          }
+        else if (id(afval_next_3).state == "Papier")
+          {
+            it.image(afval_xstart, afval_yoffset, id(papier));
+          }
+        else if (id(afval_next_3).state == "Restafval")
+          {
+            it.image(afval_xstart, afval_yoffset, id(restafval));
+          }
+        else if (id(afval_next_3).state == "GFT")
+          {
+            it.image(afval_xstart, afval_yoffset, id(gft));
+          }                
+
+        int overige_xstart = 450;
+        int overige_yoffset = afval_yoffset + 110; 
+
+        //Picnic timeframe for today
+        if(id(picnic_today).state != "-" and id(picnic_today).state != "None" and id(picnic_today).has_state()){
+          
+          it.print(overige_xstart, overige_yoffset, id(font_headings), TextAlign::TOP_LEFT, "Picnic bezorgmoment");
+          overige_yoffset += 60;
+          it.image(overige_xstart, overige_yoffset-15, id(picnic));
+          it.printf(overige_xstart+40, overige_yoffset, id(font_medium), TextAlign::CENTER_LEFT, "%s", id(picnic_today).state.c_str());
+        }
+
+        //Rocket today
+        if(id(rocket_today).state != "-"){
+          overige_yoffset += 40;
+          it.print(overige_xstart, overige_yoffset, id(font_headings), TextAlign::TOP_LEFT, "Raketlancering");
+          overige_yoffset += 60;          
+          it.printf(overige_xstart, overige_yoffset, id(font_mdi_medium_small), TextAlign::CENTER_LEFT, "\U000F14DF"); 
+          it.printf(overige_xstart+40, overige_yoffset, id(font_medium), TextAlign::CENTER_LEFT, "%s", id(rocket_today).state.c_str());
+
+        }        
+  
+
+
+        //footer
+          int x = 790;
+          int y = 470;
+
+        it.printf(x, y, id(font_footer), TextAlign::CENTER_RIGHT, "%.0f%% (%.2f V)", id(batt_percentage).state, id(batt_voltage).state);
+        int batt_size = GetTextWidth(&it, id(font_footer), "%.0f%% (%.2f V)", id(batt_percentage).state, id(batt_voltage).state);
+
+        /* Battery Voltage */
+        if(id(batt_percentage).has_state()) {
+          x -=  batt_size;
+          y -= 2;
+          if (id(batt_percentage).state >= 100) {
+              it.print(x, y, id(font_mdi_footer), TextAlign::CENTER_RIGHT, "\U000F0079");
+          } else if (id(batt_percentage).state  >= 90) {
+              it.print(x, y, id(font_mdi_footer), TextAlign::CENTER_RIGHT, "\U000F0082");
+          } else if (id(batt_percentage).state  >= 80) {
+              it.print(x, y, id(font_mdi_footer), TextAlign::CENTER_RIGHT, "\U000F0081");
+          } else if (id(batt_percentage).state  >= 70) {
+              it.print(x, y, id(font_mdi_footer), TextAlign::CENTER_RIGHT, "\U000F0080");
+          } else if (id(batt_percentage).state  >= 60) {
+              it.print(x, y, id(font_mdi_footer), TextAlign::CENTER_RIGHT, "\U000F007F");
+          } else if (id(batt_percentage).state  >= 50) {
+              it.print(x, y, id(font_mdi_footer), TextAlign::CENTER_RIGHT, "\U000F007E");
+          } else if (id(batt_percentage).state  >= 40) {
+              it.print(x, y, id(font_mdi_footer), TextAlign::CENTER_RIGHT, "\U000F007D");
+          } else if (id(batt_percentage).state  >= 30) {
+              it.print(x, y, id(font_mdi_footer), TextAlign::CENTER_RIGHT, "\U000F007C");
+          } else if (id(batt_percentage).state  >= 20) {
+              it.print(x, y, id(font_mdi_footer), TextAlign::CENTER_RIGHT, "\U000F007B");
+          } else {
+              it.print(x, y, id(font_mdi_footer), TextAlign::CENTER_RIGHT, "\U000F007A");
+          }
+          y += 2;
+        }
+
+        int batt_icon_size = GetTextWidth(&it, id(font_mdi_footer), "\U000F007A");
+        x -=  batt_icon_size;
+
+        it.strftime(x, y, id(font_footer), TextAlign::CENTER_RIGHT, "%d/%m/%Y %H:%M  | ", id(esptime).now());
+        
+        int update_size = GetTextWidth(&it, id(font_footer), " %d/%m/%Y %H:%M  | ", id(esptime).now());
+        x -=  update_size;
+
+        it.print(x, y-2, id(font_mdi_footer), TextAlign::CENTER_RIGHT, "\U000F0450");
+      
+      }
+      else{
+        it.print(400, 240, id(font_mdi_large), TextAlign::CENTER, "\U000F0083");
+        it.print(400, 320, id(font_headings), TextAlign::TOP_CENTER, "Batterij bijna leeg");
+
+      }

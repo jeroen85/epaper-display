@@ -1,0 +1,273 @@
+################################################
+## Packages / E-paper
+################################################
+
+template:
+  - sensor:
+      - unique_id: e_paper_dagen_op_accu
+        name: E-paper op accu 
+        unit_of_measurement: days
+        state: >
+          {% set event = as_timestamp(strptime('22-04-2023 18:00','%d-%m-%Y %H:%M')) %}
+          {% set delta = ((event - now().timestamp()) / 86400) | round (1) %}
+          {{ -delta }}
+        state_class: measurement
+
+  - trigger:
+      - platform: time_pattern
+        minutes: "/1"
+    sensor:
+      - name: e-paper display data
+        unique_id: e_paper_display_data
+        icon: ios:display-2
+        availability: "true"
+        state: "OK"
+        attributes:
+
+          weather_condition_now_test: >
+            partly-snowy-rainy
+
+          weather_condition_now: >
+            {% set cond_now = states('weather.accuweather') %}
+            {% if states('sun.sun') == 'below_horizon' %}
+                {% if cond_now == 'sunny' %} night {% elif cond_now == 'partlycloudy' %} night-partly-cloudy {% else %} {{ cond_now }} {% endif %}
+            {% else %}
+                {{ cond_now }}
+            {% endif %}
+
+          weather_temperature_now: >
+            {{ state_attr('weather.openweathermap', 'temperature') | round(1) }}            
+
+          weather_temperature_today: >
+            {{ state_attr('weather.openweathermap', 'forecast')[0].temperature | round(1) }}
+
+          weather_templow_today: >
+            {{ state_attr('weather.openweathermap', 'forecast')[0].templow | round(1) }}  
+
+          weather_rain_today: >
+            {{ state_attr('weather.openweathermap', 'forecast')[0].precipitation | round(1) }}    
+
+          weather_wind_speed_now: >
+            {{ state_attr('weather.openweathermap', 'wind_speed') | round(1) }}  
+
+          weather_wind_force_now: >
+            {{ states('sensor.buienradar_wind_force') }}  
+
+          weather_wind_direction_now: >
+            {% set wind = state_attr('weather.openweathermap', 'wind_bearing') %}
+            {% if wind >= 348.75 or wind <= 11.25 %}
+            N
+            {% elif wind >= 11.25 and wind <= 33.75 %}
+            NNO
+            {% elif wind >= 33.75 and wind <= 56.25 %}
+            NO
+            {% elif wind >= 56.25 and wind <= 78.75 %}
+            ONO
+            {% elif wind >= 78.75 and wind <= 101.25 %}
+            O
+            {% elif wind >= 101.25 and wind <= 123.75 %}
+            OZO
+            {% elif wind >= 123.75 and wind <= 146.25 %}
+            ZO
+            {% elif wind >= 146.25 and wind <= 168.75 %}
+            ZZO
+            {% elif wind >= 168.75 and wind <= 191.25 %}
+            Z
+            {% elif wind >= 191.25 and wind <= 213.75 %}
+            ZZW
+            {% elif wind >= 213.75 and wind <= 236.25 %}
+            ZW
+            {% elif wind >= 236.25 and wind <= 258.75 %}
+            WZW
+            {% elif wind >= 258.75 and wind <= 281.25 %}
+            W
+            {% elif wind >= 281.25 and wind <= 303.75 %}
+            WNW
+            {% elif wind >= 303.75 and wind <= 326.25 %}
+            NW
+            {% elif wind >= 326.25 and wind <= 348.75 %}
+            NNW
+            {% else %}
+            ?
+            {% endif %}
+
+
+
+          weather_condition_0: >
+            {{ state_attr('weather.openweathermap', 'forecast')[0+1].condition }}
+          weather_temperature_0: >
+            {{ state_attr('weather.openweathermap', 'forecast')[0+1].temperature | round(1) }}
+          weather_templow_0: >
+            {{ state_attr('weather.openweathermap', 'forecast')[0+1].templow | round(1) }}  
+          weather_rain_0: >
+            {{ state_attr('weather.openweathermap', 'forecast')[0+1].precipitation | round(1) }}                        
+          weather_day_0: >
+            {% set days = ['Zo', 'Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za'] %}
+            {{ days[as_timestamp(state_attr('weather.openweathermap', 'forecast')[0+1].datetime) | timestamp_custom('%w') | int] }}
+
+          weather_condition_1: >
+            {{ state_attr('weather.openweathermap', 'forecast')[1+1].condition }}
+          weather_temperature_1: >
+            {{ state_attr('weather.openweathermap', 'forecast')[1+1].temperature | round(1) }}
+          weather_templow_1: >
+            {{ state_attr('weather.openweathermap', 'forecast')[1+1].templow | round(1) }}  
+          weather_rain_1: >
+            {{ state_attr('weather.openweathermap', 'forecast')[1+1].precipitation | round(1) }}  
+          weather_day_1: >
+            {% set days = ['Zo', 'Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za'] %}
+            {{ days[as_timestamp(state_attr('weather.openweathermap', 'forecast')[1+1].datetime) | timestamp_custom('%w') | int] }}
+
+          weather_condition_2: >
+            {{ state_attr('weather.openweathermap', 'forecast')[2+1].condition }}
+          weather_temperature_2: >
+            {{ state_attr('weather.openweathermap', 'forecast')[2+1].temperature | round(1) }}
+          weather_templow_2: >
+            {{ state_attr('weather.openweathermap', 'forecast')[2+1].templow | round(1) }}  
+          weather_rain_2: >
+            {{ state_attr('weather.openweathermap', 'forecast')[2+1].precipitation | round(1) }}  
+          weather_day_2: >
+            {% set days = ['Zo', 'Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za'] %}
+            {{ days[as_timestamp(state_attr('weather.openweathermap', 'forecast')[2+1].datetime) | timestamp_custom('%w') | int] }}
+
+          weather_condition_3: >
+            {{ state_attr('weather.openweathermap', 'forecast')[3+1].condition }}
+          weather_temperature_3: >
+            {{ state_attr('weather.openweathermap', 'forecast')[3+1].temperature | round(1) }}
+          weather_templow_3: >
+            {{ state_attr('weather.openweathermap', 'forecast')[3+1].templow | round(1) }}  
+          weather_rain_3: >
+            {{ state_attr('weather.openweathermap', 'forecast')[3+1].precipitation | round(1) }}  
+          weather_day_3: >
+            {% set days = ['Zo', 'Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za'] %}
+            {{ days[as_timestamp(state_attr('weather.openweathermap', 'forecast')[3+1].datetime) | timestamp_custom('%w') | int] }}
+          
+          weather_condition_4: >
+            {{ state_attr('weather.openweathermap', 'forecast')[4+1].condition }}
+          weather_temperature_4: >
+            {{ state_attr('weather.openweathermap', 'forecast')[4+1].temperature | round(1) }}
+          weather_templow_4: >
+            {{ state_attr('weather.openweathermap', 'forecast')[4+1].templow | round(1) }}  
+          weather_rain_4: >
+            {{ state_attr('weather.openweathermap', 'forecast')[4+1].precipitation | round(1) }}  
+          weather_day_4: >
+            {% set days = ['Zo', 'Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za'] %}
+            {{ days[as_timestamp(state_attr('weather.openweathermap', 'forecast')[4+1].datetime) | timestamp_custom('%w') | int] }}
+
+          afval_today: >
+            {% set vandaag = states('sensor.afvalwijzer_today_formatted') %}
+            {% if vandaag != 'Geen' and now() < today_at('17:30') %}
+              {{ vandaag }} vandaag
+            {% else %}
+              -
+            {% endif %}
+
+          afval_next: >
+            {{ states('sensor.afvalwijzer_next') }}
+
+          afval_next_0: >
+            {%set afvalwijzer = expand("sensor.afvalwijzer_pmd","sensor.afvalwijzer_gft","sensor.afvalwijzer_restafval","sensor.afvalwijzer_papier")%}
+            {%set afvalwijzer=afvalwijzer|sort(attribute='attributes.days_until_collection_date')|map(attribute='attributes.friendly_name')|list%}
+            {{ afvalwijzer[0] }}   
+          afval_next_date_0: >   
+            {%set afvalwijzer = expand("sensor.afvalwijzer_pmd","sensor.afvalwijzer_gft","sensor.afvalwijzer_restafval","sensor.afvalwijzer_papier")%}
+            {%set afvalwijzer=afvalwijzer|sort(attribute='attributes.days_until_collection_date')|map(attribute='state')|list%}
+            {{ strptime(afvalwijzer[0], '%d-%m-%Y').strftime('%d/%m')}} 
+
+          afval_next_1: >
+            {%set afvalwijzer = expand("sensor.afvalwijzer_pmd","sensor.afvalwijzer_gft","sensor.afvalwijzer_restafval","sensor.afvalwijzer_papier")%}
+            {%set afvalwijzer=afvalwijzer|sort(attribute='attributes.days_until_collection_date')|map(attribute='attributes.friendly_name')|list%}
+            {{ afvalwijzer[1] }}   
+          afval_next_date_1: >   
+            {%set afvalwijzer = expand("sensor.afvalwijzer_pmd","sensor.afvalwijzer_gft","sensor.afvalwijzer_restafval","sensor.afvalwijzer_papier")%}
+            {%set afvalwijzer=afvalwijzer|sort(attribute='attributes.days_until_collection_date')|map(attribute='state')|list%}
+            {{ strptime(afvalwijzer[1], '%d-%m-%Y').strftime('%d/%m')}}   
+
+          afval_next_2: >
+            {%set afvalwijzer = expand("sensor.afvalwijzer_pmd","sensor.afvalwijzer_gft","sensor.afvalwijzer_restafval","sensor.afvalwijzer_papier")%}
+            {%set afvalwijzer=afvalwijzer|sort(attribute='attributes.days_until_collection_date')|map(attribute='attributes.friendly_name')|list%}
+            {{ afvalwijzer[2] }}   
+          afval_next_date_2: >   
+            {%set afvalwijzer = expand("sensor.afvalwijzer_pmd","sensor.afvalwijzer_gft","sensor.afvalwijzer_restafval","sensor.afvalwijzer_papier")%}
+            {%set afvalwijzer=afvalwijzer|sort(attribute='attributes.days_until_collection_date')|map(attribute='state')|list%}
+            {{ strptime(afvalwijzer[2], '%d-%m-%Y').strftime('%d/%m')}}  
+
+          afval_next_3: >
+            {%set afvalwijzer = expand("sensor.afvalwijzer_pmd","sensor.afvalwijzer_gft","sensor.afvalwijzer_restafval","sensor.afvalwijzer_papier")%}
+            {%set afvalwijzer=afvalwijzer|sort(attribute='attributes.days_until_collection_date')|map(attribute='attributes.friendly_name')|list%}
+            {{ afvalwijzer[3] }}   
+          afval_next_date_3: >   
+            {%set afvalwijzer = expand("sensor.afvalwijzer_pmd","sensor.afvalwijzer_gft","sensor.afvalwijzer_restafval","sensor.afvalwijzer_papier")%}
+            {%set afvalwijzer=afvalwijzer|sort(attribute='attributes.days_until_collection_date')|map(attribute='state')|list%}
+            {{ strptime(afvalwijzer[3], '%d-%m-%Y').strftime('%d/%m')}}                                                                   
+
+          picnic_today: >
+            {% set days = ['Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag', 'Zondag'] %}
+
+            {% set start_next = states('sensor.picnic_next_delivery_slot_start') %}
+            {% set end_next = states('sensor.picnic_next_delivery_slot_end') %}
+            {% set start_today = states('sensor.picnic_next_delivery_eta_start') %}
+            {% set end_today = states('sensor.picnic_next_delivery_eta_end') %}
+
+            {% if start_next not in ('unknown', 'unavailable') %}
+
+              {% set midnight = now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp() %}
+              {% set event = as_timestamp(start_next) %}
+              {% set delta = ((event - midnight) // 86400) | int %}
+              {% if delta == 0 %}
+                {% set dag = "Vandaag" %}
+              {% elif delta == 1 %}
+                {% set dag = "Morgen" %}
+              {% elif delta == 2 %}
+                {% set dag = "Overmorgen" %}  
+              {% else %}
+                {% set dag = days[(event | timestamp_custom('%w')|int -1)] %}  
+              {% endif %}
+
+              {% if start_today != 'unknown' and end_today != 'unknown' %}
+                {{ dag }} {{ as_timestamp(start_today) | timestamp_custom('%H:%M') }} - {{ as_timestamp(end_today) | timestamp_custom('%H:%M') }}
+              
+              {% elif start_next != 'unknown' and end_next != 'unknown' %}
+                {{ dag }} {{ as_timestamp(start_next) | timestamp_custom('%H:%M') }} - {{ as_timestamp(end_next) | timestamp_custom('%H:%M') }}
+              {% else %}
+                -
+              {% endif %}
+            {% else %}
+              -
+            {% endif %}     
+
+          rocket_today: >
+            {% if state_attr('sensor.rocket_launch_1', 'provider') == 'SpaceX' %}
+              {% set timestamp = as_datetime(state_attr('sensor.rocket_launch_1', 'launch_target_timestamp')) | as_local() %}
+            {% elif state_attr('sensor.rocket_launch_2', 'provider') == 'SpaceX' %}
+              {% set timestamp = as_datetime(state_attr('sensor.rocket_launch_2', 'launch_target_timestamp')) | as_local() %}
+            {% elif state_attr('sensor.rocket_launch_3', 'provider') == 'SpaceX' %}
+              {% set timestamp = as_datetime(state_attr('sensor.rocket_launch_3', 'launch_target_timestamp')) | as_local() %}
+            {% elif state_attr('sensor.rocket_launch_4', 'provider') == 'SpaceX' %}
+              {% set timestamp = as_datetime(state_attr('sensor.rocket_launch_4', 'launch_target_timestamp')) | as_local() %}
+            {% elif state_attr('sensor.rocket_launch_5', 'provider') == 'SpaceX' %}
+              {% set timestamp = as_datetime(state_attr('sensor.rocket_launch_5', 'launch_target_timestamp')) | as_local() %}
+            {% else %}
+              {% set timestamp = 0 %}
+            {% endif %}
+
+            {% if timestamp != 0 and timestamp > today_at('06:00') and timestamp < today_at('23:59')%}
+              Vandaag om {{ timestamp.strftime('%H:%M')}}
+            {% else %}
+              -  
+            {% endif %}                  
+
+          sun_next_rising: >
+            {{ as_timestamp(state_attr("sun.sun", "next_rising"))| timestamp_custom('%H:%M') }}
+          sun_next_setting: >
+            {{ as_timestamp(state_attr("sun.sun", "next_setting"))| timestamp_custom('%H:%M') }}
+          moon_phase: >
+            {{ states('sensor.moon_phase') }}
+
+          day_full: >
+            {% set days = ['Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag', 'Zondag'] %}
+            {{ days[now().weekday()] }}  
+
+          datum: >
+            {% set months = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'] %}
+            {{ now().day }} {{ months[now().month-1] }} {{ now().year }}  
+
